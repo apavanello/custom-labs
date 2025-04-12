@@ -1,0 +1,350 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aws-event-driven-arch-lab
+  namespace: girus
+  labels:
+    app: girus-lab-template
+data:
+  lab.yaml: |
+    name: aws-event-driven-arch
+    title: "AWS: Arquiteturas Orientadas a Eventos com SQS, SNS e Lambda"
+    description: "Explore a construção de arquiteturas serverless orientadas a eventos na AWS (simulada com LocalStack) utilizando SQS para filas, SNS para tópicos de publicação/assinatura e Lambda para processamento. Aprenda a conectar esses serviços para criar sistemas desacoplados e escaláveis."
+    maxDuration: 45m
+    image: "linuxtips/girus-localstack:0.1"
+    youtubeVideo: ""
+    privileged: true
+    type: "aws"
+    entrypoint: "/entrypoint.sh"
+    tasks:
+      - name: "Instalando o Vim"
+        description: "Atualize os repositórios, instale o editor Vim e verifique a configuração da AWS CLI para LocalStack."
+        steps:
+          - "Atualize os repositórios do sistema:"
+          - "`apt update`"
+          - "Instale o editor Vim:"
+          - "`apt install -y vim`"
+          - "Verifique se o Vim foi instalado corretamente:"
+          - "`vim --version | head -n 1`"
+        tips:
+          - type: "info"
+            title: "Ambiente LocalStack"
+            content: "Este laboratório utiliza LocalStack para simular serviços AWS localmente. Os comandos AWS CLI são direcionados para os endpoints do LocalStack."
+          - type: "tip"
+            title: "Comandos básicos do Vim"
+            content: "Para abrir um arquivo use 'vim <arquivo>'. Pressione 'i' para inserir texto. Pressione 'ESC' e digite ':wq' para salvar e sair, ou ':q!' para sair sem salvar."
+        validation:
+          - command: "which vim > /dev/null && echo 'success' || echo 'error'"
+            expectedOutput: "success"
+            errorMessage: "O Vim não foi instalado corretamente. Tente executar 'apt install -y vim' novamente."
+
+      - name: "Criando uma Fila SQS (Simple Queue Service)"
+        description: "Crie uma fila SQS para armazenar mensagens que serão processadas posteriormente."
+        steps:
+          - "O SQS é um serviço de fila de mensagens gerenciado que desacopla componentes de aplicações."
+          - "Crie uma fila SQS padrão chamada 'minha-fila':"
+          - "`aws sqs create-queue --queue-name minha-fila`"
+          - "A saída do comando acima incluirá o 'QueueUrl'. Anote-o ou capture-o, pois será necessário."
+          - "Capture a URL da fila em uma variável de ambiente para facilitar (substitua se necessário):"
+          - "`QUEUE_URL=$(aws sqs get-queue-url --queue-name minha-fila --query QueueUrl --output text)`"
+          - "`echo \"URL da Fila: $QUEUE_URL\"`"
+          - "Liste as filas para confirmar a criação:"
+          - "`aws sqs list-queues`"
+          - "Obtenha atributos da fila, como o ARN (Amazon Resource Name):"
+          - "`aws sqs get-queue-attributes --queue-url $QUEUE_URL --attribute-names QueueArn`"
+          - "Capture o ARN da fila em uma variável:"
+          - "`QUEUE_ARN=$(aws sqs get-queue-attributes --queue-url $QUEUE_URL --attribute-names QueueArn --query Attributes.QueueArn --output text)`"
+          - "`echo \"ARN da Fila: $QUEUE_ARN\"`"
+        tips:
+          - type: "info"
+            title: "SQS Standard vs FIFO"
+            content: "O SQS oferece filas Standard (melhor esforço de ordenação, entrega pelo menos uma vez) e FIFO (ordenação garantida, entrega exatamente uma vez). Para este lab, usamos a Standard (padrão)."
+          - type: "tip"
+            title: "Desacoplamento com Filas"
+            content: "Filas permitem que o produtor de mensagens e o consumidor operem independentemente, aumentando a resiliência e escalabilidade."
+        validation:
+          - command: "aws --endpoint-url=http://localhost:4566 sqs list-queues --queue-name-prefix minha-fila --query 'QueueUrls[0]' | grep -q minha-fila && echo 'success' || echo 'error'"
+            expectedOutput: "success"
+            errorMessage: "A fila SQS minha-fila não foi criada corretamente. Verifique com aws sqs list-queues."
+
+      - name: "Criando um Tópico SNS (Simple Notification Service)"
+        description: "Crie um tópico SNS para publicar mensagens para múltiplos assinantes."
+        steps:
+          - "O SNS é um serviço de mensagens pub/sub gerenciado. Produtores publicam mensagens em tópicos, e o SNS as entrega para os assinantes."
+          - "Crie um tópico SNS chamado 'meu-topico':"
+          - "`aws sns create-topic --name meu-topico`"
+          - "A saída incluirá o 'TopicArn'. Anote-o ou capture-o."
+          - "Capture o ARN do tópico em uma variável de ambiente:"
+          - "`TOPIC_ARN=$(aws sns list-topics --query \"Topics[?contains(TopicArn, \'meu-topico\')].TopicArn\" --output text)`"
+          - "`echo \"ARN do Tópico: $TOPIC_ARN\"`"
+          - "Liste os tópicos para confirmar a criação:"
+          - "`aws sns list-topics`"
+        tips:
+          - type: "info"
+            title: "Modelo Pub/Sub"
+            content: "O modelo Publish/Subscribe (Pub/Sub) permite que uma mensagem publicada em um tópico seja entregue a múltiplos tipos de assinantes (SQS, Lambda, HTTP/S, Email, SMS) de forma paralela (fan-out)."
+          - type: "tip"
+            title: "Filtragem de Mensagens"
+            content: "Assinantes SNS podem configurar políticas de filtro para receber apenas mensagens que correspondam a critérios específicos."
+        validation:
+          - command: "aws sns list-topics --query \"Topics[?contains(TopicArn, \'meu-topico\')]\" | grep -q meu-topico && echo 'success' || echo 'error'"
+            expectedOutput: "success"
+            errorMessage: "O tópico SNS 'meu-topico' não foi criado corretamente. Verifique com 'aws sns list-topics'."
+
+      - name: "Criando a Função Lambda Processadora"
+        description: "Crie uma função Lambda simples em Python que será acionada para processar mensagens."
+        steps:
+          - "A AWS Lambda permite executar código sem provisionar ou gerenciar servidores."
+          - "Crie um diretório para o código da função:"
+          - "`mkdir -p lambda-processor`"
+          - "Crie o arquivo Python da função usando vim:"
+          - "`vim lambda-processor/processor.py`"
+          - "No editor vim, pressione 'i' para entrar no modo de inserção e adicione o seguinte conteúdo:"
+          - |
+            ```
+            import json
+            import base64
+            def lambda_handler(event, context):
+                print(f"Evento recebido: {json.dumps(event)}")
+                processed_messages = []
+                # Processa mensagens vindas do SQS
+                for record in event.get('Records', []):
+                    message_body = record.get('body', '{}')
+                    try:
+                        # Tenta decodificar se for mensagem do SNS via SQS
+                        sns_message = json.loads(message_body)
+                        if 'Message' in sns_message:
+                            actual_message = sns_message['Message']
+                            print(f"Mensagem do SNS (via SQS) processada: {actual_message}")
+                            processed_messages.append(actual_message)
+                        else: # Mensagem direta do SQS
+                            print(f"Mensagem direta do SQS processada: {message_body}")
+                            processed_messages.append(message_body)
+                    except json.JSONDecodeError:
+                         # Assume que é uma mensagem direta do SQS se não for JSON
+                         print(f"Mensagem SQS (não JSON) processada: {message_body}")
+                         processed_messages.append(message_body)
+                # Retorna sucesso (em um cenário real, poderia retornar IDs das mensagens processadas)
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({
+                        'message': f'{len(processed_messages)} mensagens processadas com sucesso!',
+                        'processed_content': processed_messages
+                    })
+                }
+            ```
+          - "Para salvar o arquivo e sair do vim, pressione 'ESC' e digite ':wq'."
+          - "Comprima o arquivo para criar o pacote de implantação:"
+          - "`cd lambda-processor && zip processor.zip processor.py && cd ..`"
+          - "Crie a função Lambda (usando um ARN de role fictício para LocalStack):"
+          - "`aws lambda create-function \\\n    --function-name processador-eventos \\\n    --runtime python3.9 \\\n    --handler processor.lambda_handler \\\n    --zip-file fileb://lambda-processor/processor.zip \\\n    --role arn:aws:iam::000000000000:role/lambda-role`"
+          - "Capture o ARN da função Lambda:"
+          - "`LAMBDA_ARN=$(aws lambda get-function --function-name processador-eventos --query 'Configuration.FunctionArn' --output text)`"
+          - "`echo \"ARN da Lambda: $LAMBDA_ARN\"`"
+          - "Verifique se a função foi criada:"
+          - "`aws lambda list-functions | grep processador-eventos`"
+        tips:
+          - type: "info"
+            title: "Modelo de Evento Lambda"
+            content: "A estrutura do objeto 'event' recebido pela Lambda varia dependendo da fonte que a acionou (SQS, SNS, API Gateway, etc.). É importante consultar a documentação para entender o formato esperado."
+          - type: "warning"
+            title: "Role de Execução (IAM)"
+            content: "Em um ambiente AWS real, você precisa criar uma Role IAM com as permissões necessárias para a Lambda acessar outros serviços (como ler da fila SQS). No LocalStack, usamos um ARN fictício."
+        validation:
+          - command: "aws lambda list-functions --query 'Functions[?FunctionName==`processador-eventos`]' | grep -q processador-eventos && echo 'success' || echo 'error'"
+            expectedOutput: "success"
+            errorMessage: "A função Lambda 'processador-eventos' não foi criada corretamente."
+
+      - name: "Conectando SNS ao SQS (Assinatura)"
+        description: "Assine a fila SQS ao tópico SNS para que mensagens publicadas no SNS sejam enviadas para a fila."
+        steps:
+          - "Para que a fila SQS receba mensagens do tópico SNS, precisamos criar uma assinatura."
+          - "Execute o comando para assinar a fila SQS ao tópico SNS:"
+          - "`aws sns subscribe \\\n    --topic-arn $TOPIC_ARN \\\n    --protocol sqs \\\n    --notification-endpoint $QUEUE_ARN`"
+          - "Capture o ARN da assinatura:"
+          - "`SUBSCRIPTION_ARN=$(aws sns list-subscriptions-by-topic --topic-arn $TOPIC_ARN --query \"Subscriptions[?Endpoint==\'$QUEUE_ARN\'].SubscriptionArn\" --output text)`"
+          - "`echo \"ARN da Assinatura: $SUBSCRIPTION_ARN\"`"
+          - "**Importante:** Precisamos permitir que o SNS envie mensagens para a fila SQS. Crie um arquivo de política:"
+          - "`vim sqs-policy.json`"
+          - "No editor vim, pressione 'i' e adicione o seguinte conteúdo, **substituindo $TOPIC_ARN e $QUEUE_ARN pelos valores corretos**: "
+          - |
+            "```
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": { "Service": "sns.amazonaws.com" },
+                  "Action": "sqs:SendMessage",
+                  "Resource": "QUEUE_ARN",
+                  "Condition": {
+                    "ArnEquals": {
+                      "aws:SourceArn": "TOPIC_ARN"
+                    }
+                  }
+                }
+              ]
+            }
+            ```
+          - "Salve e saia (ESC, :wq). Agora aplique a política na fila SQS:"
+          - "Vamos copiar a política para a variável POLICY_JSON substituindo os ARNs:"
+          - "`POLICY_JSON=$(cat sqs-policy.json | sed \"s|QUEUE_ARN|$QUEUE_ARN|\" | sed \"s|TOPIC_ARN|$TOPIC_ARN|\")`"
+          - "`aws sqs set-queue-attributes --queue-url $QUEUE_URL --attributes Policy=\"$POLICY_JSON\"`"
+          - "Verifique as assinaturas do tópico:"
+          - "`aws sns list-subscriptions-by-topic --topic-arn $TOPIC_ARN`"
+          - "Você deve ver a assinatura da fila SQS."
+        tips:
+          - type: "warning"
+            title: "Política da Fila SQS"
+            content: "É um erro comum esquecer de configurar a política de permissões na fila SQS para permitir que o SNS envie mensagens. Sem essa política, a entrega falhará silenciosamente."
+          - type: "info"
+            title: "Confirmação da Assinatura"
+            content: "Em alguns cenários (como assinaturas HTTP/S ou Email), o SNS requer uma confirmação do endpoint antes de começar a enviar mensagens. Para SQS e Lambda, a confirmação é geralmente automática."
+          - type: "tip"
+            title: "Raw Message Delivery"
+            content: "Para evitar que o SNS encapsule a mensagem em sua própria estrutura JSON, você pode habilitar 'Raw Message Delivery' na assinatura. Isso simplifica o processamento no assinante se ele só espera o corpo original da mensagem."
+        validation:
+          - command: "aws sns list-subscriptions-by-topic --topic-arn $TOPIC_ARN --query \"Subscriptions[?Endpoint==\'$QUEUE_ARN\']\" | grep -q $QUEUE_ARN && echo 'success' || echo 'error'"
+            expectedOutput: "success"
+            errorMessage: "A assinatura da fila SQS no tópico SNS não foi encontrada ou criada corretamente."
+          - command: "aws sqs get-queue-attributes --queue-url $QUEUE_URL --attribute-names Policy | grep -q sns.amazonaws.com && echo 'success' || echo 'error'"
+            expectedOutput: "success"
+            errorMessage: "A política da fila SQS não parece permitir o envio de mensagens pelo SNS."
+
+      - name: "Conectando SQS à Lambda (Event Source Mapping)"
+        description: "Configure a fila SQS como uma fonte de eventos para a função Lambda, acionando a função quando mensagens chegam na fila."
+        steps:
+          - "O Event Source Mapping (ESM) conecta uma fonte de eventos (como SQS, Kinesis, DynamoDB Streams) a uma função Lambda."
+          - "Crie o mapeamento entre a fila SQS e a função Lambda:"
+          - "`aws lambda create-event-source-mapping \\\n    --function-name processador-eventos \\\n    --event-source-arn $QUEUE_ARN \\\n    --batch-size 1`" # Processa uma mensagem por vez para simplificar
+          - "Capture o UUID do mapeamento:"
+          - "`ESM_UUID=$(aws lambda list-event-source-mappings --function-name processador-eventos --event-source-arn $QUEUE_ARN --query 'EventSourceMappings[0].UUID' --output text)`"
+          - "`echo \"UUID do Mapeamento: $ESM_UUID\"`"
+          - "Liste os mapeamentos de fontes de evento para a função:"
+          - "`aws lambda list-event-source-mappings --function-name processador-eventos`"
+          - "Você deve ver o mapeamento para a fila SQS com estado 'Creating' ou 'Enabled'."
+        tips:
+          - type: "info"
+            title: "Funcionamento do ESM"
+            content: "O serviço Lambda faz polling (consulta periódica) na fila SQS configurada. Quando encontra mensagens, invoca a função Lambda de forma síncrona com um lote dessas mensagens."
+          - type: "tip"
+            title: "Batch Size e Window"
+            content: "Você pode configurar o 'BatchSize' (número de mensagens por lote) e 'MaximumBatchingWindowInSeconds' para otimizar a invocação da Lambda, processando múltiplas mensagens de uma vez."
+          - type: "warning"
+            title: "Tratamento de Erros no ESM"
+            content: "Se a função Lambda falhar ao processar um lote de mensagens do SQS, as mensagens geralmente retornam para a fila após o tempo de visibilidade (visibility timeout) para serem reprocessadas. Configure Dead Letter Queues (DLQs) no SQS para lidar com falhas persistentes."
+        validation:
+          - command: "aws lambda list-event-source-mappings --function-name processador-eventos --event-source-arn $QUEUE_ARN --query 'EventSourceMappings[0].EventSourceArn' | grep -q $QUEUE_ARN && echo 'success' || echo 'error'"
+            expectedOutput: "success"
+            errorMessage: "O mapeamento da fonte de eventos SQS para a Lambda não foi criado ou encontrado."
+
+      - name: "Testando a Arquitetura Completa"
+        description: "Publique uma mensagem no tópico SNS e observe o fluxo completo até a execução da Lambda."
+        steps:
+          - "Agora vamos testar o fluxo completo: SNS -> SQS -> Lambda."
+          - "Publique uma mensagem de teste no tópico SNS:"
+          - "`aws sns publish \\\n    --topic-arn $TOPIC_ARN \\\n    --message '{\"id\": \"123\", \"produto\": \"teste\", \"valor\": 10.50}' \\\n    --message-attributes '{\"EventType\": {\"DataType\": \"String\", \"StringValue\": \"PedidoCriado\"}}'`"
+          - "A mensagem foi publicada no SNS."
+          - "O SNS deve entregar a mensagem para a assinatura da fila SQS."
+          - "O serviço Lambda detectará a mensagem na fila SQS através do ESM."
+          - "A função Lambda 'processador-eventos' será invocada com a mensagem."
+          - "**Verificação:**"
+          - "1. Verifique se a mensagem foi recebida (e removida) da fila SQS (pode levar alguns segundos):"
+          - "`aws sqs receive-message --queue-url $QUEUE_URL --max-number-of-messages 10` (Espere alguns segundos, a saída deve ser vazia ou mostrar mensagens sendo processadas)"
+          - "2. Verifique os logs da função Lambda. No LocalStack, isso pode ser mais desafiador. Tente verificar os logs do container do LocalStack se possível, ou em um ambiente AWS real, verifique o CloudWatch Logs."
+          - "Como alternativa para este lab, podemos invocar a Lambda manualmente com um payload similar ao que o SQS enviaria:"
+          - "`aws lambda invoke \\\n      --function-name processador-eventos \\\n      --payload file://<(echo '{\"Records\":[{\"body\":\"{\\\"Message\\\": \\\"{\\\\\\\"id\\\\\\\": \\\\\\\"123\\\\\\\", \\\\\\\"produto\\\\\\\": \\\\\\\"teste\\\\\\\", \\\\\\\"valor\\\\\\\": 10.50}\\\",\\\"MessageAttributes\\\":{\\\"EventType\\\":{\\\"Type\\\":\\\"String\\\",\\\"Value\\\":\\\"PedidoCriado\\\"}} }\"}]}') \\\n      test-output.json`"
+          - "`cat test-output.json`" # Verifique se a saída contém a mensagem processada
+        tips:
+          - type: "info"
+            title: "Monitoramento e Logs"
+            content: "Em produção, o CloudWatch Logs é essencial para depurar funções Lambda. Configure métricas e alarmes no CloudWatch para monitorar o fluxo (ex: número de mensagens no SQS, invocações e erros da Lambda)."
+          - type: "tip"
+            title: "Idempotência"
+            content: "Como SQS Standard pode entregar mensagens mais de uma vez, suas funções Lambda consumidoras devem ser idempotentes (processar a mesma mensagem múltiplas vezes sem efeitos colaterais indesejados)."
+        validation:
+          - command: "cat test-output.json | grep -q '1 mensagens processadas' && echo 'success' || echo 'error'"
+            expectedOutput: "success"
+            errorMessage: "A invocação manual da Lambda com payload de teste falhou ou não processou a mensagem."
+
+      - name: "Opcional: Padrão Fan-Out com Múltiplos Assinantes"
+        description: "Adicione uma segunda função Lambda assinando diretamente o tópico SNS para demonstrar o padrão fan-out."
+        steps:
+          - "O padrão fan-out ocorre quando uma única mensagem SNS é entregue a múltiplos assinantes."
+          - "Crie uma segunda função Lambda (Notificadora):"
+          - "`mkdir -p lambda-notifier`"
+          - "`vim lambda-notifier/notifier.py`"
+          - "```python
+            import json
+
+            def lambda_handler(event, context):
+                print(f\"Evento SNS recebido para notificação: {json.dumps(event)}\")
+                for record in event.get('Records', []):
+                    sns_info = record.get('Sns', {})
+                    message = sns_info.get('Message')
+                    attributes = sns_info.get('MessageAttributes')
+                    print(f\"Notificação: Mensagem='{message}', Atributos='{attributes}'\")
+                
+                return {'statusCode': 200, 'body': json.dumps('Notificação processada')}
+            ```"
+          - "`ESC`, `:wq`"
+          - "`cd lambda-notifier && zip notifier.zip notifier.py && cd ..`"
+          - "`aws lambda create-function \\\n    --function-name notificador-eventos \\\n    --runtime python3.9 \\\n    --handler notifier.lambda_handler \\\n    --zip-file fileb://lambda-notifier/notifier.zip \\\n    --role arn:aws:iam::000000000000:role/lambda-role`"
+          - "`LAMBDA_NOTIFIER_ARN=$(aws lambda get-function --function-name notificador-eventos --query 'Configuration.FunctionArn' --output text)`"
+          - "Assine a segunda Lambda diretamente ao tópico SNS:"
+          - "`aws sns subscribe \\\n    --topic-arn $TOPIC_ARN \\\n    --protocol lambda \\\n    --notification-endpoint $LAMBDA_NOTIFIER_ARN`"
+          - "**Importante:** Adicione permissão para o SNS invocar esta segunda Lambda:"
+          - "`aws lambda add-permission \\\n    --function-name notificador-eventos \\\n    --statement-id sns-invoke-permission \\\n    --action lambda:InvokeFunction \\\n    --principal sns.amazonaws.com \\\n    --source-arn $TOPIC_ARN`"
+          - "Publique outra mensagem no SNS:"
+          - "`aws sns publish --topic-arn $TOPIC_ARN --message 'Nova mensagem para Fan-Out'`"
+          - "Verifique (idealmente nos logs): A mensagem agora deve ter sido enviada para a fila SQS (acionando a primeira Lambda) E diretamente para a segunda Lambda ('notificador-eventos')."
+        tips:
+          - type: "info"
+            title: "Casos de Uso Fan-Out"
+            content: "Útil quando um evento precisa acionar múltiplas ações independentes, como: atualizar um banco de dados (via SQS->Lambda), enviar uma notificação (via SNS->Lambda) e arquivar o evento (via SNS->Kinesis Firehose)."
+        validation:
+          - command: "aws lambda list-functions --query 'Functions[?FunctionName==`notificador-eventos`]' | grep -q notificador-eventos && echo 'success' || echo 'error'"
+            expectedOutput: "success"
+            errorMessage: "A segunda função Lambda 'notificador-eventos' não foi criada."
+          - command: "aws sns list-subscriptions-by-topic --topic-arn $TOPIC_ARN --query 'Subscriptions[?Protocol==`lambda`].Endpoint' | grep -q $LAMBDA_NOTIFIER_ARN && echo 'success' || echo 'error'"
+            expectedOutput: "success"
+            errorMessage: "A segunda Lambda não foi assinada corretamente ao tópico SNS."
+
+      - name: "Limpeza dos Recursos"
+        description: "Remova todos os recursos AWS criados durante o laboratório."
+        steps:
+          - "É importante limpar os recursos para evitar custos (em AWS real) e manter o ambiente organizado."
+          - "Remova o mapeamento da fonte de eventos SQS para a Lambda:"
+          - "`aws lambda delete-event-source-mapping --uuid $ESM_UUID`"
+          - "Remova a permissão do SNS para invocar a segunda Lambda:"
+          - "`aws lambda remove-permission --function-name notificador-eventos --statement-id sns-invoke-permission || echo 'Permissão já removida ou não encontrada'`"
+          - "Remova as assinaturas do tópico SNS:"
+          - "`SUBSCRIPTION_ARN_SQS=$(aws sns list-subscriptions-by-topic --topic-arn $TOPIC_ARN --query 'Subscriptions[?Endpoint==`'$QUEUE_ARN'`].SubscriptionArn' --output text)`"
+          - "`SUBSCRIPTION_ARN_LAMBDA=$(aws sns list-subscriptions-by-topic --topic-arn $TOPIC_ARN --query 'Subscriptions[?Endpoint==`'$LAMBDA_NOTIFIER_ARN'`].SubscriptionArn' --output text)`"
+          - "`[ ! -z \"$SUBSCRIPTION_ARN_SQS\" ] && aws sns unsubscribe --subscription-arn $SUBSCRIPTION_ARN_SQS`"
+          - "`[ ! -z \"$SUBSCRIPTION_ARN_LAMBDA\" ] && aws sns unsubscribe --subscription-arn $SUBSCRIPTION_ARN_LAMBDA`"
+          - "Remova as funções Lambda:"
+          - "`aws lambda delete-function --function-name processador-eventos`"
+          - "`aws lambda delete-function --function-name notificador-eventos || echo 'Função notificador já removida ou não criada'`"
+          - "Remova o tópico SNS:"
+          - "`aws sns delete-topic --topic-arn $TOPIC_ARN`"
+          - "Remova a fila SQS:"
+          - "`aws sqs delete-queue --queue-url $QUEUE_URL`"
+          - "Verifique se os recursos foram removidos (os comandos de listagem devem retornar listas vazias):"
+          - "`aws sqs list-queues`"
+          - "`aws sns list-topics`"
+          - "`aws lambda list-functions | grep -E 'processador-eventos|notificador-eventos'`"
+        tips:
+          - type: "warning"
+            title: "Ordem da Limpeza"
+            content: "A ordem da limpeza pode ser importante. Geralmente, remova primeiro as conexões (ESM, Assinaturas, Permissões) antes de remover os recursos principais (Lambda, SQS, SNS)."
+        validation:
+          - command: "aws sqs list-queues --query 'QueueUrls[*]' | grep -q minha-fila || echo 'Fila removida'"
+            expectedOutput: "Fila removida"
+            errorMessage: "A fila SQS 'minha-fila' não foi removida corretamente."
+          - command: "aws sns list-topics --query 'Topics[?contains(TopicArn, `meu-topico`)]' | grep -q meu-topico || echo 'Tópico removido'"
+            expectedOutput: "Tópico removido"
+            errorMessage: "O tópico SNS 'meu-topico' não foi removido corretamente."
+          - command: "aws lambda list-functions --query 'Functions[?FunctionName==`processador-eventos`]' | grep -q processador-eventos || echo 'Lambda removida'"
+            expectedOutput: "Lambda removida"
+            errorMessage: "A função Lambda 'processador-eventos' não foi removida corretamente."

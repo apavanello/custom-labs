@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: meu-novo-lab
+  namespace: girus
+  labels:
+    app: girus-lab-template
+data:
+  lab.yaml: |
+    name: meu-lab-id
+    title: "Título do Meu Laboratório"
+    description: "Descrição detalhada do laboratório"
+    duration: 45m
+    image: "ubuntu:20.04"  # Imagem base para o pod
+    tasks:
+      - name: "Nome da Tarefa 1"
+        description: "Descrição da tarefa"
+        steps:
+          - "Passo 1: Faça isso"
+          - "Passo 2: Execute aquilo"
+        validation:
+          - command: "comando para verificar"
+            expectedOutput: "saída esperada"
+            errorMessage: "Mensagem de erro personalizada"

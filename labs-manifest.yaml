@@ -1,0 +1,13 @@
+name: "Teste da coleção de labs"
+description: Teste da coleção de labs
+labs:
+  - name: "Configuração do NGINX"
+    path: "labs/lab_nginx_configuracao.yaml"
+    description: "Aprenda a configurar o servidor web NGINX em um ambiente Linux."
+  - name: "novo lab"
+    path: "labs/meu-novo-lab.yaml"
+    description: "exemplo de lab."
+  - name: "aws event driven"
+    path: "labs/lab_43_aws_event_driven_sns_sqs_lambda.yaml"
+    description: "Explore a construção de arquiteturas serverless orientadas a eventos na AWS (simulada com LocalStack) utilizando SQS para filas, SNS para tópicos de publicação/assinatura e Lambda para processamento. Aprenda a conectar esses serviços para criar sistemas desacoplados e escaláveis."
+  
